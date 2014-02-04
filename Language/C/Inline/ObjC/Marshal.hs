@@ -1,3 +1,4 @@
+
 {-# LANGUAGE TemplateHaskell, QuasiQuotes, PatternGuards #-}
 
 -- |
@@ -28,7 +29,9 @@ module Language.C.Inline.ObjC.Marshal (
 ) where
 
   -- common libraries
+import Control.Arrow
 import Data.Bits                  (bitSize)
+import Data.Char                  (toUpper)
 import Data.Int
 import Data.Word
 import Foreign.C                  as C
@@ -37,6 +40,7 @@ import Foreign.C.Types            as C
 import Foreign.Marshal            as C
 import Foreign.Ptr                as C
 import Foreign.StablePtr          as C
+import Foreign.Storable           as C
 import Language.Haskell.TH        as TH
 import Language.Haskell.TH.Syntax as TH
 
@@ -92,6 +96,96 @@ checkTypeName tyname
 -- Determine foreign types
 -- -----------------------
 
+-- | Corresponding C integer type for @Int@.
+intTy :: QC.Type
+intTy = if bitSize (0::Int) == 64 then [cty| long |] else [cty| int |]
+{-# INLINE intTy #-}
+
+cIntTy :: TH.TypeQ
+cIntTy = if bitSize (0::Int) == 64 then [t| C.CLong |] else [t| C.CInt |]
+{-# INLINE cIntTy #-}
+
+-- | Dictionary for C.Types and corresponding c-type.
+cTyMap :: [(TH.Type, QC.Type)]
+cTyMap = map (first ConT)
+  [(''C.CChar, [cty| char |])
+  ,(''C.CSChar, [cty| signed char |])
+  ,(''C.CUChar, [cty| unsigned char |])
+  ,(''C.CShort, [cty| short |])
+  ,(''C.CUShort, [cty| unsigned short |])
+  ,(''C.CInt, [cty| int |])
+  ,(''C.CUInt, [cty| unsigned int |])
+  ,(''C.CLong, [cty| long |])
+  ,(''C.CULong, [cty| unsigned long |])
+  ,(''C.CLLong, [cty| long long |])
+  ,(''C.CULLong, [cty| unsigned long long |])
+  ,(''C.CFloat, [cty| float |])
+  ,(''C.CDouble, [cty| double |])
+  ]
+
+-- | Dictionary for boxed numbers and corresponding c-type.
+-- Type Constructor, intermediate Haskell type, corresponding cty, conversion function from cty, to cty.
+boxTyMap :: [(TH.Type, (TH.TypeQ, QC.Type, TH.ExpQ, TH.ExpQ))]
+boxTyMap = map (first ConT)
+  [(''Int, (cIntTy, intTy, [| fromIntegral |], [| fromIntegral |]))
+  ,(''Int8, ([t| C.CChar |], [cty| char |], [| fromIntegral |], [| fromIntegral |]))
+  ,(''Int16, ([t| C.CShort |], [cty| short |], [| fromIntegral |], [| fromIntegral |]))
+  ,(''Int32, ([t| C.CInt |], [cty| int |], [| fromIntegral |], [| fromIntegral |]))
+  ,(''Int64, ([t| C.CLong |], [cty| long |], [| fromIntegral |], [| fromIntegral |]))
+  ,(''Word8, ([t| C.CUChar |], [cty| unsigned char |], [| fromIntegral |], [| fromIntegral |]))
+  ,(''Word16, ([t| C.CUShort |], [cty| unsigned short |], [| fromIntegral |], [| fromIntegral |]))
+  ,(''Word32, ([t| C.CUInt |], [cty| unsigned int |], [| fromIntegral |], [| fromIntegral |]))
+  ,(''Word64, ([t| C.CULong |], [cty| unsigned long |], [| fromIntegral |], [| fromIntegral |]))
+  ,(''Float, ([t| C.CFloat |], [cty| float |], [| \(CFloat a) -> a |], [| CFloat |]))
+  ,(''Double, ([t| C.CDouble |], [cty| double |], [| \(CDouble a) -> a |], [| CDouble |]))
+  ]
+
+-- | Dictionary of encoding method via NSNumber, used when inside NSArray and so on.
+numberMarshalDic :: [(Name, (Q TH.Type, String, QC.Type))]
+numberMarshalDic = [(''Int,  if bitSize (0::Int) == 64
+                             then ([t| C.CLong |], "long", [cty| long |])
+                             else ([t| C.CInt |], "int", [cty| int |]))
+                   ,(''CInt, ([t| C.CInt |], "int", [cty| int |]))
+                   ,(''CShort, ([t| C.CShort |], "short", [cty|short|]))
+                   ,(''CLong, ([t| C.CLong |], "long",[cty|long|]))
+                   ,(''Double, ([t| C.CDouble |], "double",[cty|double|]))
+                   ,(''CDouble, ([t| C.CDouble |], "double",[cty|double|]))
+                   ,(''Float, ([t| C.CFloat |], "float",[cty|float|]))
+                   ,(''CFloat, ([t| C.CFloat |],"float",[cty|float|]))
+                   ,(''CChar, ([t| C.CChar |], "char",[cty|char|]))
+                   ]
+
+-- | Get the Object type for Haskell type.
+toObject :: QC.Extensions -> TH.Type -> Maybe QC.Type
+toObject lang ty = lookup ty objectDic <|> haskellTypeToCType' lang ty
+objectDic = map (first ConT)
+  [(''Int, [cty| typename NSNumber * |])
+  ,(''Int8, [cty| typename NSNumber * |])
+  ,(''Int16, [cty| typename NSNumber * |])
+  ,(''Int32, [cty| typename NSNumber * |])
+  ,(''Int64, [cty| typename NSNumber * |])
+  ,(''Word8, [cty| typename NSNumber * |])
+  ,(''Word16, [cty| typename NSNumber * |])
+  ,(''Word32, [cty| typename NSNumber * |])
+  ,(''Word64, [cty| typename NSNumber * |])
+  ,(''Float, [cty| typename NSNumber * |])
+  ,(''Double, [cty| typename NSNumber * |])
+  ,(''C.CChar, [cty| typename NSNumber * |])
+  ,(''C.CSChar, [cty| typename NSNumber * |])
+  ,(''C.CUChar, [cty| typename NSNumber * |])
+  ,(''C.CShort, [cty| typename NSNumber * |])
+  ,(''C.CUShort, [cty| typename NSNumber * |])
+  ,(''C.CInt, [cty| typename NSNumber * |])
+  ,(''C.CUInt, [cty| typename NSNumber * |])
+  ,(''C.CLong, [cty| typename NSNumber * |])
+  ,(''C.CULong, [cty| typename NSNumber * |])
+  ,(''C.CLLong, [cty| typename NSNumber * |])
+  ,(''C.CULLong, [cty| typename NSNumber * |])
+  ,(''C.CFloat, [cty| typename NSNumber * |])
+  ,(''C.CDouble, [cty| typename NSNumber * |])
+  ]
+
+
 -- |Determine the C type that we map a given Haskell type to.
 --
 haskellTypeToCType :: QC.Extensions -> TH.Type -> Q QC.Type
@@ -107,8 +201,7 @@ haskellTypeToCType' lang (ListT `AppT` (ConT charTy))        -- marshal '[Char]'
   | charTy == ''Char 
   = haskellTypeNameToCType' lang ''String
 haskellTypeToCType' lang (ListT `AppT` argTy)            -- marshal '[a]' as 'NSArray', if we know how to marshal @a@.
-  | Just cTy <- (haskellTypeToCType' lang argTy)
-  , isCPtrType cTy
+  | Just cTy <- toObject lang argTy
   = Just [cty| typename NSArray * |]
 haskellTypeToCType' lang (ConT maybeC `AppT` argTy)        -- encode a 'Maybe' around a pointer type in the pointer
   | maybeC == ''Maybe && maybe False isCPtrType cargTy
@@ -119,8 +212,9 @@ haskellTypeToCType' lang (ConT tc)                         -- nullary type const
   = haskellTypeNameToCType' lang tc
 haskellTypeToCType' _lang (VarT _)                         -- can't marshal an unknown type
   = Nothing
-haskellTypeToCType' _lang _ty                              -- everything else is marshalled as a stable pointer
-  = Just [cty| typename HsStablePtr |]
+haskellTypeCoCType' _lang ty
+  | Just cTy <- lookup ty cTyMap = Just cTy
+  | otherwise =  Just [cty| typename HsStablePtr |]
 
 -- |Determine the C type that we map a given Haskell type constructor to — i.e., we map all Haskell
 -- whose outermost constructor is the given type constructor to the returned C type..
@@ -134,32 +228,8 @@ haskellTypeNameToCType ext tyname
 haskellTypeNameToCType' :: QC.Extensions -> TH.Name -> Maybe QC.Type
 haskellTypeNameToCType' ObjC tyname
   | tyname == ''String  = Just [cty| typename NSString * |]       -- 'String'  -> '(NSString *)'
-  | tyname == ''CChar   = Just [cty| char |]                      -- 'CChar'   -> 'char'
-  | tyname == ''CSChar  = Just [cty| signed char |]               -- 'CSChar'  -> 'signed char'
-  | tyname == ''CUChar  = Just [cty| unsigned char |]             -- 'CUChar'  -> 'unsigned char'
-  | tyname == ''CShort  = Just [cty| short |]                     -- 'CShort'  -> 'short'
-  | tyname == ''CUShort = Just [cty| unsigned short |]            -- 'CUShort' -> 'unsigned short'
-  | tyname == ''CInt    = Just [cty| int |]                       -- 'CInt'    -> 'int'
-  | tyname == ''Int     = if  bitSize (0::Int) == 64
-                          then Just [cty| long |]                 -- 'Int'     -> 'long', if Int is 64-bit
-                          else Just [cty| int |]                  -- 'Int'     -> 'int', otherwise
-  | tyname == ''Int8    = Just [cty| char |]                      -- 'Int8'    -> 'char'
-  | tyname == ''Int16   = Just [cty| short |]                     -- 'Int16'   -> 'short'
-  | tyname == ''Int32   = Just [cty| int |]                       -- 'Int32'   -> 'int'
-  | tyname == ''Int64   = Just [cty| long |]                      -- 'Int64'   -> 'long'
-  | tyname == ''Word8   = Just [cty| unsigned char |]             -- 'Word8'   -> 'unsigned char'
-  | tyname == ''Word16  = Just [cty| unsigned short |]            -- 'Word16'  -> 'unsigned short'
-  | tyname == ''Word32  = Just [cty| unsigned int |]              -- 'Word32'  -> 'unsigned int'
-  | tyname == ''Word64  = Just [cty| unsigned long |]             -- 'Word64'  -> 'unsignedlong'
-  | tyname == ''CUInt   = Just [cty| unsigned int |]              -- 'CUInt'   -> 'unsigned int'
-  | tyname == ''CLong   = Just [cty| long |]                      -- 'CLong'   -> 'long'
-  | tyname == ''CULong  = Just [cty| unsigned long |]             -- 'CULong'  -> 'unsigned long'
-  | tyname == ''CLLong  = Just [cty| long long |]                 -- 'CLLong'  -> 'long long'
-  | tyname == ''CULLong = Just [cty| unsigned long long |]        -- 'CULLong' -> 'unsigned long long'
-  | tyname == ''CFloat  = Just [cty| float |]                     -- 'CFloat'  -> 'float'
-  | tyname == ''CDouble = Just [cty| double |]                    -- 'CDouble' -> 'double'
-  | tyname == ''Float   = Just [cty| float |]                     -- 'Float'  -> 'float'
-  | tyname == ''Double  = Just [cty| double |]                    -- 'Double' -> 'double'
+  | Just cTy <- lookup (ConT tyname) cTyMap           = Just cTy  -- C.Types   -> QC.Types (see 'cTyMap')
+  | Just (_,cTy, _,_ ) <- lookup (ConT tyname) boxTyMap = Just cTy  -- BOXED     -> QC.Types (see 'boxTyMap')
   | tyname == ''()      = Just [cty| void |]                      -- '()'      -> 'void'
 haskellTypeNameToCType' _lang _tyname                             -- <everything else> -> 'HsStablePtr'
   = Just [cty| typename HsStablePtr |]
@@ -234,43 +304,46 @@ generateHaskellToCMarshaller hsTy cTy
            , \val cont -> [| C.withCString $val $cont |]
            , \argName -> [cexp| [NSString stringWithUTF8String: $id:(show argName)] |]
            )
+  | cTy == [cty| typename NSNumber * |]
+  , Just (intermTy, slotName, cIntermTy) <- lookup hsTy (map (first ConT) numberMarshalDic)
+  = do (_, _, tran, unmar) <- generateHaskellToCMarshaller hsTy cIntermTy
+       let numberWith = "numberWith" ++ toUpper (head slotName) : tail slotName
+       return ( intermTy,
+                cIntermTy ,
+                tran,
+                \argName -> [cexp| [NSNumber $id:numberWith: $exp:(unmar argName)] |])
   | cTy == [cty| typename NSArray * |]
   , ListT `AppT` tv <- hsTy
-  , Just fr <- haskellTypeToCType' ObjC tv
+  , Just fr <- toObject ObjC tv
   = do (inv, intc, tran, unmar) <- generateHaskellToCMarshaller tv fr
        tmpName <- newName "tmp"
-       return ( [t| C.Ptr $inv |]
-              , [cty| $ty:intc * |]
+       return ( [t| C.Ptr (C.Ptr $inv) |]
+              , [cty| $ty:intc ** |]
               , \val cont -> do
                    a <- newName "a"
-                   let val' = appsE [[|mapM|], lamE [varP a] $ tran (varE a) [|return|], val]
-                   [| $val' >>= flip (withArray0 nullPtr) $cont |]
-              , \argName ->
+                   let val' = appsE [[|mapM|], lamE [varP a] $ tran (varE a) [|new|], val]
+                   [| do { vals <- $val' ; ans <- withArray0 nullPtr vals $cont
+                         ; mapM C.free vals ; return ans}|]
+              , \argName -> let arg = show argName in
                  [cexp| ({ NSMutableArray *arr;
                             arr = [NSMutableArray array];
                             int i;i=0;
-                            while ($id:(show argName)[i] != NULL) {
-                              $ty:intc $id:(show tmpName) = $id:(show argName)[i++];
+                            while ($id:arg[i] != NULL) {
+                              $ty:intc $id:(show tmpName) = *$id:arg[i++];
                               [arr addObject: $(unmar tmpName)];
                             }
                             [NSArray arrayWithArray: arr];
                           }) |]
               )
-  | cTy == [cty| int |]
-  = return ( [t| C.CInt |]
+  | (hsTy, cTy) `elem` cTyMap
+  = return (return hsTy
            , cTy
-           , \val cont -> [| $cont (C.CInt $ fromIntegral $(val)) |]
-           , \argName -> [cexp| $id:(show argName)|])
-  | cTy == [cty| short |]
-  = return ( [t| C.CShort |]
-           , cTy
-           , \val cont -> [| $cont (C.CShort $ fromIntegral $(val)) |]
-           , \argName -> [cexp| $id:(show argName)|])
-  | cTy == [cty| long |]
-  = return ( [t| C.CLong |]
-           , cTy
-           , \val cont -> [| $cont (C.CLong $ fromIntegral $(val)) |]
-           , \argName -> [cexp| $id:(show argName)|])
+           , \val cont -> [| $cont $val |]
+           , \argName -> [cexp| $id:(show argName) |]
+           )
+  | Just (hsTy', cTy', from, to) <- lookup hsTy boxTyMap
+  , cTy' == cTy
+  = return (hsTy', cTy, \val cont -> [| $cont ($to $val) |], \argName -> [cexp| $id:(show argName)|])
   | cTy == [cty| typename HsStablePtr |] 
   = return ( [t| C.StablePtr $(return hsTy) |]
            , cTy
@@ -291,6 +364,11 @@ generateHaskellToCMarshaller hsTy cTy
 --
 generateCToHaskellMarshaller :: TH.Type -> QC.Type -> Q (TH.TypeQ, QC.Type, HaskellMarshaller, CMarshaller)
 generateCToHaskellMarshaller hsTy cTy
+  | cTy == [cty| typename NSNumber * |]
+  , Just (intm, slot, cIntm) <- lookup hsTy (map (first ConT) numberMarshalDic)
+  = do (_, _, tran, unmar) <- generateCToHaskellMarshaller hsTy cIntm
+       return (intm, cIntm, tran,
+               \argName -> [cexp| [$exp:(unmar argName) $id:(slot ++ "Value")] |])
   | cTy == [cty| typename NSString * |]
   = return ( [t| C.CString |]
            , [cty| char * |]
@@ -307,54 +385,38 @@ generateCToHaskellMarshaller hsTy cTy
                  })
                |]
            )
-  | cTy == [cty| typename NSArray * |]
-  , ListT `AppT` ConT tv <- hsTy
-  , Just (hsEl, acc, cEl) <- lookup tv numberMarshalDic
-  = do (_, _, tran, unmar) <- flip generateCToHaskellMarshaller cEl =<< hsEl
-       tmp <- newName "tmp"
-       arrLen <- show <$> newName "arrLen"
-       buffer <- show <$> newName "buffer"
-       let demote = do { arr <- newName "arr" ; lamE [varP arr] $ tran (varE arr) [| return |] }
-       return ( [t| C.Ptr $hsEl |]
-              , [cty| $ty:cEl * |]
-              , \val cont -> [| do { arr <- C.peekArray0 nullPtr $val
-                                   ; arr' <- mapM $demote arr
-                                   ; $cont arr' } |]
-              , \argName -> 
-               let arg = show argName 
-               in [cexp|
-                    ({ typename NSUInteger $id:arrLen = [$id:arg count] + 1;
-                       $ty:cEl *$id:buffer = malloc($id:arrLen);
-                       for (int i = 0; i < $id:arrLen - 1; i++) {
-                         id $id:(showName tmp) = [[$id:arg objectAtIndex: i] $id:acc];
-                         $id:buffer[i++] = $exp:(unmar tmp);
-                       }
-                       $id:buffer[$id:arrLen - 1] = NULL;
-                       $id:buffer;
-                    })
-                  |]
-              )
+  | (hsTy, cTy) `elem` cTyMap
+  = return (return hsTy, cTy, \val cont -> [| $cont $val |], \argName -> [cexp| $id:(show argName)|])
+  | Just (hsTy', cTy', from, to) <- lookup hsTy boxTyMap
+  , cTy' == cTy
+  = return (hsTy', cTy, \val cont -> [| $cont ($from $val) |], \argName -> [cexp| $id:(show argName)|])
   | cTy == [cty| typename NSArray * |]
   , ListT `AppT` tv <- hsTy
-  , Just fr <- haskellTypeToCType' ObjC tv
+  , Just fr <- toObject ObjC tv
   = do (inv, intc, tran, unmar) <- generateCToHaskellMarshaller tv fr
        tmp <- newName "tmp"
+       ptr <- show <$> newName "ptr"
        arrLen <- show <$> newName "arrLen"
        buffer <- show <$> newName "buffer"
-       let demote = do { arr <- newName "arr" ; lamE [varP arr] $ tran (varE arr) [| return |] }
-       return ( [t| C.Ptr $inv |]
-              , [cty| $ty:intc * |]
-              , \val cont -> [| do { arr <- C.peekArray0 nullPtr $val
-                                   ; arr' <- mapM $demote arr
+       let demote = do { a <- newName "a" ; b <- newName "b"
+                       ; lamE [varP a] [| do { ans <- peek $(varE a) >>= $(lamE [varP b] $ tran (varE b) [| return |])
+                                             ; C.free $(varE a); return ans} |]
+                       }
+       return ( [t| C.Ptr (C.Ptr $inv) |]
+              , [cty| $ty:intc ** |]
+              , \val cont -> [| do { arr0 <- C.peekArray0 nullPtr $val
+                                   ; arr' <- mapM $demote arr0
                                    ; $cont arr' } |]
               , \argName -> 
                let arg = show argName 
                in [cexp|
                     ({ typename NSUInteger $id:arrLen = [$id:arg count] + 1;
-                       $ty:intc *$id:buffer = malloc($id:arrLen);
+                       $ty:intc **$id:buffer = malloc($id:arrLen);
                        for (int i = 0; i < $id:arrLen - 1; i++) {
                          id $id:(showName tmp) = [$id:arg objectAtIndex: i];
-                         $id:buffer[i++] = $exp:(unmar tmp);
+                         $ty:intc *ptr = malloc(1);
+                         *ptr = $exp:(unmar tmp);
+                         $id:buffer[i++] = ptr;
                        }
                        $id:buffer[$id:arrLen - 1] = NULL;
                        $id:buffer;
@@ -375,17 +437,3 @@ generateCToHaskellMarshaller hsTy cTy
            )
   | otherwise
   = reportErrorAndFail ObjC $ "cannot marshall '" ++ prettyQC cTy ++ "' to '" ++ TH.pprint hsTy ++ "'"    
-
-numberMarshalDic :: [(Name, (Q TH.Type, String, QC.Type))]
-numberMarshalDic = [(''Int,  if bitSize (0::Int) == 64
-                             then ([t| C.CLong |], "longValue", [cty| long |])
-                             else ([t| C.CInt |], "intValue", [cty| int |]))
-                   ,(''CInt, ([t| C.CInt |], "intValue", [cty| int |]))
-                   ,(''CShort, ([t| C.CShort |], "shortValue", [cty|short|]))
-                   ,(''CLong, ([t| C.CLong |], "longValue",[cty|long|]))
-                   ,(''Double, ([t| C.CDouble |], "doubleValue",[cty|double|]))
-                   ,(''CDouble, ([t| C.CDouble |], "doubleValue",[cty|double|]))
-                   ,(''Float, ([t| C.CFloat |], "floatValue",[cty|float|]))
-                   ,(''CFloat, ([t| C.CFloat |],"floatValue",[cty|float|]))
-                   ,(''CChar, ([t| C.CChar |], "charValue",[cty|char|]))
-                   ]
