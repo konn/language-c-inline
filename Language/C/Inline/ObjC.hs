@@ -12,7 +12,7 @@
 -- This module exports the principal API for inline Objective-C.
 
 module Language.C.Inline.ObjC (
-  objc_import, objc_interface, objc_implementation, objc, objc_emit
+  objc_import, objc_interface, objc_implementation, objc, objc', objc_emit
 ) where
 
   -- common libraries
@@ -205,6 +205,54 @@ objc vars resTy e
             = generateCWrapper cwrapperName cArgTys vars cArgMarshallers cBridgeArgTys cArgVars
                                e
                                (ConT resTy) cResTy cResMarshaller cBridgeResTy
+    ; stashObjC_h wrapperProto
+    ; stashObjC_m wrapperDef
+
+        -- Generate invocation of the C wrapper sandwiched into Haskell-side marshalling
+    ; generateHSCall vars hsArgMarshallers (callThroughTable idx hsWrapperTy) hsResMarshaller True
+    }
+  where
+    callThroughTable idx ty
+      = do { jumptable <- getForeignTable
+           ; [|fromDyn
+                 ((unsafePerformIO $ readIORef $jumptable) ! $(TH.lift idx))
+                 (error "InlineObjC: INTERNAL ERROR: type mismatch in jumptable")
+               :: $ty |]
+           }
+
+objc' :: [TH.Name] -> Q TH.Type -> QC.Exp -> Q TH.Exp
+objc' vars resTy0 e
+  = {- tryWithPlaceholder $ -} do  -- FIXME: catching the 'fail' purges all reported errors :(
+    {   -- Sanity check of arguments
+    ; varTys <- mapM determineVarType vars
+    ; resTy <- resTy0
+
+        -- Determine C types
+    ; cArgTys <- mapM (haskellTypeToCType ObjC) varTys
+    ; cResTy  <- haskellTypeToCType ObjC resTy
+
+        -- Determine the bridging type and the marshalling code
+    ; (bridgeArgTys, cBridgeArgTys, hsArgMarshallers, cArgMarshallers) <-
+        unzip4 <$> zipWithM generateHaskellToCMarshaller varTys cArgTys
+    ; (bridgeResTy,  cBridgeResTy,  hsResMarshaller,  cResMarshaller)  <-
+        generateCToHaskellMarshaller resTy cResTy
+
+        -- Haskell type of the foreign wrapper function
+    ; let hsWrapperTy = haskellWrapperType [] bridgeArgTys bridgeResTy
+
+        -- FFI setup for the C wrapper
+    ; cwrapperName <- newName "cwrapper"
+    ; stashHS
+        [ forImpD CCall Safe (show cwrapperName) cwrapperName hsWrapperTy
+        ]
+    ; idx <- extendJumpTable cwrapperName
+
+        -- Generate the C wrapper code (both prototype and definition)
+    ; cArgVars <- mapM (newName . nameBase) vars
+    ; let (wrapperProto, wrapperDef)
+            = generateCWrapper cwrapperName cArgTys vars cArgMarshallers cBridgeArgTys cArgVars
+                               e
+                               resTy cResTy cResMarshaller cBridgeResTy
     ; stashObjC_h wrapperProto
     ; stashObjC_m wrapperDef
 
