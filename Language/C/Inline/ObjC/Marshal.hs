@@ -412,7 +412,7 @@ generateCToHaskellMarshaller hsTy cTy
                in [cexp|
                     ({ typename NSUInteger $id:arrLen = [$id:arg count] + 1;
                        $ty:intc **$id:buffer = malloc($id:arrLen);
-                       for (int i = 0; i < $id:arrLen - 2; i++) {
+                       for (int i = 0; i < $id:arrLen - 1; i++) {
                          id $id:(showName tmp) = [$id:arg objectAtIndex: i];
                          $ty:intc *ptr;
                          *ptr = $exp:(unmar tmp);
