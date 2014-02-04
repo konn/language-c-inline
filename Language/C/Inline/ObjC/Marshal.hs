@@ -400,7 +400,7 @@ generateCToHaskellMarshaller hsTy cTy
        buffer <- show <$> newName "buffer"
        let demote = do { a <- newName "a" ; b <- newName "b"
                        ; lamE [varP a] [| do { ans <- peek $(varE a) >>= $(lamE [varP b] $ tran (varE b) [| return |])
-                                             ; C.free $(varE a); return ans} |]
+                                             ; return ans} |]
                        }
        return ( [t| C.Ptr (C.Ptr $inv) |]
               , [cty| $ty:intc ** |]
@@ -408,15 +408,15 @@ generateCToHaskellMarshaller hsTy cTy
                                    ; arr' <- mapM $demote arr0
                                    ; $cont arr' } |]
               , \argName -> 
-               let arg = show argName 
+               let arg = show argName
                in [cexp|
                     ({ typename NSUInteger $id:arrLen = [$id:arg count] + 1;
                        $ty:intc **$id:buffer = malloc($id:arrLen);
-                       for (int i = 0; i < $id:arrLen - 1; i++) {
+                       for (int i = 0; i < $id:arrLen - 2; i++) {
                          id $id:(showName tmp) = [$id:arg objectAtIndex: i];
-                         $ty:intc *ptr = malloc(1);
+                         $ty:intc *ptr;
                          *ptr = $exp:(unmar tmp);
-                         $id:buffer[i++] = ptr;
+                         $id:buffer[i] = ptr;
                        }
                        $id:buffer[$id:arrLen - 1] = NULL;
                        $id:buffer;
