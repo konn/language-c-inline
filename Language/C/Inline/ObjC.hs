@@ -588,11 +588,11 @@ objc_emit
         do
         { writeFile  objcFname_h (info origFname)
         ; appendFile objcFname_h (unlines (map mkImport headers) ++ "\n")
-        ; appendFile objcFname_h (show $ QC.ppr objc_h)
+        ; appendFile objcFname_h (pretty 80 $ QC.ppr objc_h)
         ; writeFile  objcFname_m (info origFname)
         ; appendFile objcFname_m ("#import \"" ++ takeFileName objcFname_h ++ "\"\n")
         ; appendFile objcFname_m ("#import \"HsFFI.h\"\n\n")
-        ; appendFile objcFname_m (show $ QC.ppr objc_m)
+        ; appendFile objcFname_m (pretty 80 $ QC.ppr objc_m)
         }
     ; objc_jumptable <- getForeignTable
     ; labels         <- getForeignLabels

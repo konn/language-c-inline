@@ -376,11 +376,11 @@ c_emit
         do
         { writeFile  cFname_h (info origFname)
         ; appendFile cFname_h (unlines (map mkImport headers) ++ "\n")
-        ; appendFile cFname_h (show $ QC.ppr c_h)
+        ; appendFile cFname_h (QC.pretty 80 $ QC.ppr c_h)
         ; writeFile  cFname_m (info origFname)
         ; appendFile cFname_m ("#include \"HsFFI.h\"\n")
         ; appendFile cFname_m ("#include \"" ++ takeFileName cFname_h ++ "\"\n\n")
-        ; appendFile cFname_m (show $ QC.ppr c_m)
+        ; appendFile cFname_m (QC.pretty 80 $ QC.ppr c_m)
         }
     ; c_jumptable <- getForeignTable
     ; labels         <- getForeignLabels
